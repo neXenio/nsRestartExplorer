@@ -87,9 +87,9 @@ std::size_t countOpenFileExplorerWindows(bool makeNotActive = false)
             TCHAR szClassName[MAX_PATH] = {0};
             GetClassName(hwnd, szClassName, MAX_PATH);
 
-            if ((0 == lstrcmpW(szClassName, L"Explorer­WClass")) ||
-                (0 == lstrcmpW(szClassName, L"Cabinet­WClass"))) {
-                if ((GetWindowLongW(hwnd, GWL_STYLE) & WS_VISIBLE) ==
+            if ((0 == lstrcmp(szClassName, TEXT("Explorer­WClass"))) ||
+                (0 == lstrcmp(szClassName, TEXT("Cabinet­WClass")))) {
+                if ((GetWindowLong(hwnd, GWL_STYLE) & WS_VISIBLE) ==
                     WS_VISIBLE) {
                     ++(helper->counter);
                     if (helper->makeNotActive) {
@@ -104,7 +104,7 @@ std::size_t countOpenFileExplorerWindows(bool makeNotActive = false)
     return helper.counter;
 }
 
-bool waitTillFileExplorerWindowsAreOpen(std::size_t expectedWindowCount)
+void waitTillFileExplorerWindowsAreOpen(std::size_t expectedWindowCount)
 {
     static const auto tick = std::chrono::milliseconds(200);
     // max time to wait till first window opens (50 * 200ms = 10s)
@@ -115,7 +115,7 @@ bool waitTillFileExplorerWindowsAreOpen(std::size_t expectedWindowCount)
     static const std::size_t counterSinceFirstWindowOpen = 5;
 
     if (expectedWindowCount == 0) {
-        return true;
+        return;
     }
 
     std::size_t counter         = 0;
@@ -131,39 +131,29 @@ bool waitTillFileExplorerWindowsAreOpen(std::size_t expectedWindowCount)
             prevWindowsOpen = openWindows;
         } else if (prevWindowsOpen != 0 &&
                    counter > counterSinceFirstWindowOpen) {
-            std::wstring error =
-                std::wstring(
-                    L"Error during waiting for reopening the "
-                    L"explorer. No new window is opening after the "
-                    L"previous one. Waited (1s). Expected Window count: ") +
-                std::to_wstring(expectedWindowCount) +
-                L", but open Windows count: " + std::to_wstring(openWindows);
-            pushString(error.c_str());
-            return false;
+            throw std::runtime_error(
+                "Error during waiting for reopening the explorer. No new "
+                "window is opening after the previous one. Waited (1s). "
+                "Expected window count: " +
+                std::to_string(expectedWindowCount) +
+                ", but open windows count: " + std::to_string(openWindows));
         } else if (prevWindowsOpen == 0 && counter > maxCounter) {
-            std::wstring error =
-                std::wstring(L"Error during waiting for reopening the "
-                             L"explorer. No window is opening after 10s "
-                             L"waiting time. Expected Window count: ") +
-                std::to_wstring(expectedWindowCount);
-            pushString(error.c_str());
-            return false;
+            throw std::runtime_error(
+                "Error during waiting for reopening the explorer. No new "
+                "window is opening after 10s waiting time. Expected window "
+                "count: " +
+                std::to_string(expectedWindowCount));
         } else if (totalCounter > maxTotallyCounter) {
-            std::wstring error =
-                std::wstring(L"Error during waiting for reopening the "
-                             L"explorer. Tooks to long for waiting (20s). "
-                             L"Expected Window count: ") +
-                std::to_wstring(expectedWindowCount) +
-                L", but open Windows count: " + std::to_wstring(openWindows);
-            pushString(error.c_str());
-            return false;
+            throw std::runtime_error(
+                "Error during waiting for reopening the explorer. Tooks to "
+                "long for waiting (20s). Expected window count: " +
+                std::to_string(expectedWindowCount) +
+                ", but open windows count: " + std::to_string(openWindows));
         }
         ++counter;
     } while (openWindows < expectedWindowCount);
 
     std::this_thread::sleep_for(tick);
-
-    return true;
 }
 
 std::optional<RM_UNIQUE_PROCESS> getUniqueProcess(DWORD dwProcessId)
@@ -199,11 +189,11 @@ std::optional<RM_UNIQUE_PROCESS> getUniqueProcess(DWORD dwProcessId)
     }
 }
 
-std::vector<RM_UNIQUE_PROCESS> ProcFindAllIdsFromExeName(LPCWSTR wzExeName)
+std::vector<RM_UNIQUE_PROCESS> ProcFindAllIdsFromExeName(const TCHAR *exeName)
 {
-    DWORD           er        = ERROR_SUCCESS;
-    BOOL            fContinue = FALSE;
-    PROCESSENTRY32W peData    = {sizeof(peData)};
+    DWORD          er        = ERROR_SUCCESS;
+    BOOL           fContinue = FALSE;
+    PROCESSENTRY32 peData    = {sizeof(peData)};
 
     auto snapshot = SnapShotHandle();
 
@@ -211,18 +201,18 @@ std::vector<RM_UNIQUE_PROCESS> ProcFindAllIdsFromExeName(LPCWSTR wzExeName)
         throw std::runtime_error("not able to get system snapshot");
     }
 
-    fContinue = Process32FirstW(snapshot.handle(), &peData);
+    fContinue = Process32First(snapshot.handle(), &peData);
 
     std::vector<RM_UNIQUE_PROCESS> result;
 
     while (fContinue) {
-        if (0 == lstrcmpiW((LPCWSTR) & (peData.szExeFile), wzExeName)) {
+        if (0 == lstrcmpi(peData.szExeFile, exeName)) {
             auto uniqueProc = getUniqueProcess(peData.th32ProcessID);
             if (uniqueProc.has_value()) {
                 result.push_back(uniqueProc.value());
             }
         }
-        fContinue = Process32NextW(snapshot.handle(), &peData);
+        fContinue = Process32Next(snapshot.handle(), &peData);
     }
 
     er = ::GetLastError();
@@ -237,18 +227,16 @@ std::vector<RM_UNIQUE_PROCESS> ProcFindAllIdsFromExeName(LPCWSTR wzExeName)
 bool restartWindowsExplorer()
 {
     try {
-        auto data = ProcFindAllIdsFromExeName(L"explorer.exe");
+        auto data = ProcFindAllIdsFromExeName(TEXT("explorer.exe"));
 
         auto sessionHandle = RmSessionHandle();
 
         auto res = RmRegisterResources(sessionHandle.session(), 0, nullptr,
                                        data.size(), data.data(), 0, nullptr);
         if (res != ERROR_SUCCESS) {
-            std::wstring error =
-                std::wstring(L"Error during RmRegisterResources, code: ") +
-                std::to_wstring(res);
-            pushString(error.c_str());
-            return false;
+            throw std::runtime_error(
+                "Error during RmRegisterResources, code: " +
+                std::to_string(res));
         }
 
         std::size_t openWindows = countOpenFileExplorerWindows();
@@ -256,29 +244,27 @@ bool restartWindowsExplorer()
         res = RmShutdown(sessionHandle.session(), RmShutdownOnlyRegistered,
                          [](UINT) {});
         if (res != ERROR_SUCCESS) {
-            std::wstring error =
-                std::wstring(L"Error during RmShutdown, code: ") +
-                std::to_wstring(res);
-            pushString(error.c_str());
             // at least try to restart it
             RmRestart(sessionHandle.session(), 0, [](UINT) {});
-            return false;
+            throw std::runtime_error("Error during RmShutDown, code: " +
+                                     std::to_string(res));
         }
 
         res = RmRestart(sessionHandle.session(), 0, [](UINT) {});
         if (res != ERROR_SUCCESS) {
-            std::wstring error =
-                std::wstring(L"Error during RmRestart, code: ") +
-                std::to_wstring(res);
-            pushString(error.c_str());
-            return false;
+            throw std::runtime_error("Error during RmRestart, code: " +
+                                     std::to_string(res));
         }
 
         // wait till File Explorer windows are open again, to avoid that they
         // overlap the installation window.
-        return waitTillFileExplorerWindowsAreOpen(openWindows);
+        waitTillFileExplorerWindowsAreOpen(openWindows);
     } catch (const std::exception &ex) {
+#ifdef UNICODE
         pushString(CStringW(ex.what()));
+#else
+        pushString(ex.what());
+#endif
         return false;
     }
 

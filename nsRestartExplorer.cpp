@@ -10,7 +10,7 @@ void nsRestartExplorer(HWND, int stringLength, TCHAR *, stack_t **stackTop)
     auto result    = RestartExplorer();
 
     if (result) {
-        pushString(L"Successful explorer restarted.");
+        pushString(TEXT("Successful explorer restarted."));
     }
 }
 
